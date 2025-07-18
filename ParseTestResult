@@ -1,0 +1,117 @@
+Private Function ParseTestResult(testResult As String, siteCode As String, ByRef subControl As String, ByRef parsedAssets As String, ByRef parsedStatus As String, logHandle As Integer, fileName As String, sheetName As String, rowNum As Long) As Boolean
+    Dim parts As Variant
+    Dim temp As String
+    Dim statusPos As Long
+    Dim subParts As Variant
+    Dim cleanSubControl As String
+
+    ' Initialize outputs
+    subControl = ""
+    parsedAssets = ""
+    parsedStatus = ""
+    
+    ' Normalize input
+    testResult = Trim(Replace(testResult, vbCrLf, " "))
+    temp = LCase(testResult)
+    
+    ' Try splitting on 'are' or 'because'
+    statusPos = InStr(temp, " are compliant")
+    If statusPos = 0 Then statusPos = InStr(temp, " are non-compliant")
+    If statusPos = 0 Then statusPos = InStr(temp, " are non compliant")
+    If statusPos = 0 Then statusPos = InStr(temp, " are not applicable")
+
+    If statusPos > 0 Then
+        ' Extract status
+        Dim statusText As String
+        statusText = Trim(Mid(temp, statusPos + 5, InStr(statusPos + 5, temp & " ", " ") - statusPos - 5))
+        Select Case LCase(statusText)
+            Case "compliant"
+                parsedStatus = "COMPLIANT"
+            Case "non-compliant", "non compliant"
+                parsedStatus = "NON-COMPLIANT"
+            Case "not applicable"
+                parsedStatus = "NON-APPLICABLE"
+            Case Else
+                WriteLog logHandle, LOG_ERROR, Now & vbTab & "Invalid status parsed: " & statusText & vbTab & "File: " & fileName & ", Sheet: " & sheetName & ", Row: " & rowNum
+                parsedStatus = "NON-APPLICABLE"
+        End Select
+
+        ' Extract subcontrol and assets
+        Dim prefix As String
+        prefix = Left(testResult, statusPos - 1)
+        parts = Split(prefix, ":")
+        If UBound(parts) >= 0 Then
+            cleanSubControl = Trim(parts(0))
+            ' Handle multiple subcontrols or site codes
+            subParts = Split(cleanSubControl, ",")
+            cleanSubControl = Trim(subParts(0)) ' Take first subcontrol
+            If InStr(cleanSubControl, " ") > 0 Then
+                subParts = Split(cleanSubControl, " ")
+                cleanSubControl = Trim(subParts(0))
+                WriteLog logHandle, LOG_WARN, Now & vbTab & "Removed site code from subcontrol: " & Trim(parts(0)) & " -> " & cleanSubControl & vbTab & "File: " & fileName & ", Sheet: " & sheetName & ", Row: " & rowNum
+            End If
+            subControl = cleanSubControl
+            If UBound(parts) >= 1 Then
+                parsedAssets = Trim(parts(1))
+            Else
+                parsedAssets = Trim(Mid(prefix, InStr(prefix, ":") + 1))
+            End If
+            ' Clean assets
+            parsedAssets = Replace(Replace(parsedAssets, " and ", ", "), ";", ",")
+            ParseTestResult = True
+            Exit Function
+        End If
+    End If
+
+    ' Fallback: Try splitting on colon
+    parts = Split(testResult, ":")
+    If UBound(parts) >= 1 Then
+        cleanSubControl = Trim(parts(0))
+        subParts = Split(cleanSubControl, ",")
+        cleanSubControl = Trim(subParts(0))
+        If InStr(cleanSubControl, " ") > 0 Then
+            subParts = Split(cleanSubControl, " ")
+            cleanSubControl = Trim(subParts(0))
+            WriteLog logHandle, LOG_WARN, Now & vbTab & "Removed site code from subcontrol: " & Trim(parts(0)) & " -> " & cleanSubControl & vbTab & "File: " & fileName & ", Sheet: " & sheetName & ", Row: " & rowNum
+        End If
+        subControl = cleanSubControl
+        temp = Trim(parts(1))
+        statusPos = InStr(LCase(temp), " are ")
+        If statusPos > 0 Then
+            Dim assetText As String
+            assetText = Left(temp, statusPos - 1)
+            parsedAssets = Replace(Replace(assetText, " and ", ", "), ";", ",")
+            statusText = Trim(Mid(temp, statusPos + 5))
+            Select Case True
+                Case InStr(LCase(statusText), "compliant") > 0
+                    parsedStatus = "COMPLIANT"
+                Case InStr(LCase(statusText), "non-compliant") > 0, InStr(LCase(statusText), "non compliant") > 0
+                    parsedStatus = "NON-COMPLIANT"
+                Case InStr(LCase(statusText), "not applicable") > 0
+                    parsedStatus = "NON-APPLICABLE"
+                Case Else
+                    WriteLog logHandle, LOG_ERROR, Now & vbTab & "Invalid status parsed: " & Left(statusText, 100) & vbTab & "File: " & fileName & ", Sheet: " & sheetName & ", Row: " & rowNum
+                    parsedStatus = "NON-APPLICABLE"
+            End Select
+            ParseTestResult = True
+            Exit Function
+        End If
+    End If
+
+    ' Fallback for partial parsing
+    If UBound(parts) >= 0 Then
+        subControl = Trim(parts(0))
+        If InStr(subControl, " ") > 0 Then
+            subParts = Split(subControl, " ")
+            subControl = Trim(subParts(0))
+        End If
+        parsedStatus = "NON-APPLICABLE"
+        parsedAssets = "Unknown"
+        WriteLog logHandle, LOG_WARN, Now & vbTab & "Partial parse in row " & rowNum & ": subControl=" & subControl & ", status=" & parsedStatus & vbTab & "File: " & fileName & ", Sheet: " & sheetName
+        ParseTestResult = True
+        Exit Function
+    End If
+
+    WriteLog logHandle, LOG_ERROR, Now & vbTab & "Invalid Test Results format in row " & rowNum & ": " & Left(testResult, 100) & vbTab & "File: " & fileName & ", Sheet: " & sheetName
+    ParseTestResult = False
+End Function
